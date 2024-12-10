@@ -1,0 +1,401 @@
+---
+title: "Prediction Assignment"
+author: "A.B."
+date: "2024-12-08"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(caret)
+library(corrplot)
+library(ggplot2)
+```
+
+### 1. Loading data
+
+```{r, }
+training <- read.csv("C:/Users/baev/Desktop/Ecopsy/03 R/07 Practical Machine Learning/Course Project/pml-training.csv")
+dim(training) # 19622   160
+
+testing <- read.csv("C:/Users/baev/Desktop/Ecopsy/03 R/07 Practical Machine Learning/Course Project/pml-testing.csv")
+dim(testing) # 20 160
+```
+
+### 2. Pre-processing data
+
+```{r, }
+sum(names(training) != names(testing))
+names(training)[160] # "classe"
+names(testing)[160] # "problem_id"
+table(training$classe)
+
+table(testing$problem_id)
+
+head(names(training))
+head(training$X)
+head(testing$X)
+tail(training$X)
+tail(testing$X)
+```
+
+"X" variable should be excluded (it's just an order of samples in the
+data frame)
+
+```{r}
+training <- training %>% mutate(X = NULL) # dim(training) # 19622   159
+testing <- testing %>%  mutate(X = NULL) # dim(testing) # 19622   159
+```
+
+Let's check how many unique values each variable has
+
+```{r}
+func1 <- function(x){
+        return(length(unique(x)))
+}
+count_of_unique_val_pre_var <- apply(X = training, MARGIN = 2, FUN = func1)
+count_of_unique_val_pre_var
+```
+
+Let's calculate NAs count for each variable
+
+```{r}
+func_count_NA <- function(x){
+        return(sum(is.na(x)))
+}
+training_NA_count_pre_var <- table(apply(X = training, MARGIN = 2, FUN = func_count_NA))
+training_NA_count_pre_var
+```
+
+As we can see, there are 92 variables without NAs and 67 variables with
+19216 NAs among 19622 samples. Let's take a deeper look into them in
+testing dataset.
+
+```{r}
+testing_NA_count_pre_var <- table(apply(X = testing, MARGIN = 2, FUN = func_count_NA))
+testing_NA_count_pre_var
+```
+
+There are even more variables with NAs in testing data set: - 59
+variables without NAs - 100 variable with 20 NAs (i.e. all values of
+these variables are NA, because testing data set consists of only 20
+samples) Let's get the names of these 100 variables:
+
+```{r}
+testing_var_with_NAs_names <- names((apply(X = testing, MARGIN = 2, FUN = func_count_NA))[(apply(X = testing, MARGIN = 2, FUN = func_count_NA)) == 20])
+# testing_var_with_NAs_names
+training_var_with_NAs_names <- names((apply(X = training, MARGIN = 2, FUN = func_count_NA))[(apply(X = training, MARGIN = 2, FUN = func_count_NA)) == 19216 ])
+```
+
+We can check that all variables with NAs values in training dataset can
+be found among variables with NAs in testing data set.
+
+```{r}
+length(training_var_with_NAs_names) # 67
+length(testing_var_with_NAs_names) # 100
+sum(training_var_with_NAs_names %in% testing_var_with_NAs_names) # 67 - ok.
+```
+
+How could we deal with NAs? It depends. In general, a few options could
+be considered: - replace NAs with zeros, - replace NAs with mean or
+median, - delete samples with NA, - exclude variables containing NAs, -
+find k near neighbors for each sample and replace NAs with mean or
+median of these neighbors. As the point to begin, we exclude all
+variables containing NAs in testing dataset from both training and
+testing data set.
+
+```{r}
+training <- training[, !(names(training) %in% testing_var_with_NAs_names)]
+testing <- testing[, !(names(testing) %in% testing_var_with_NAs_names)]
+dim(training) # 19622    59
+dim(testing) # 20 59
+```
+
+After dealing with NAs there are 59 variables left in our data sets,
+including target variable The class of "classy" variable should be
+transformed from Character-class into Factor-class.
+
+```{r}
+training$classe <- as.factor(training$classe)
+```
+
+The following Six columns of dataset (user_name, raw_timestamp_part_1,
+raw_timestamp_part_2, cvtd_timestamp, new_window, num_window) are not
+related to the sensor measurements, but rather to the identity of a
+aperson, time stamps and capture windows for the sensor data. Since I am
+trying to produce a predictive model that only relies on the
+quantitative sensor measurements, I'll remove these columns. In a
+similar way, the first six columns of the testing dataset will be also
+removed.
+
+```{r}
+training <- training[,7:dim(training)[2]] #dim(training) #  19622    53
+testing <- testing[,7:dim(testing)[2]] #dim(testing) #  19622    53
+```
+
+Other variables in dataset look like continuous ones. The following code
+produсes histogram of each variable (commented).
+
+```{r}
+#for (i in 1:(dim(training)[2]-1)){
+#        name <- names(training)[i]
+#        hist(training[,i], main = paste0(i, ' ', name))
+# }
+```
+
+Removing outliers strategy: Let's remove outliers based on the following
+(pretty soft) rule: If a value lies out of quantile range (0.0005 ,
+0.9995) we will count that value an outlier.
+
+```{r}
+ouliers_list <- list()
+for (i in 1:(dim(training)[2]-1)){
+        vect <- training[,i]
+        q1 <- quantile(x = vect, 0.0005)
+        q2 <- quantile(x = vect, 0.9995)
+        indexes <- unique(c(which(vect < q1), which(vect > q2)))
+        ouliers_list[[i]] <- indexes
+}
+
+indexes <- integer(0)
+for (i in 1:length(ouliers_list)){
+        a <- ouliers_list[[i]]
+        indexes <- unique(c(indexes, a))
+}
+
+
+training_ <- training[-indexes, ]
+dim(training_) # 19608    53
+
+#for (i in 1:(dim(training_)[2]-1)){
+#        name <- names(training_)[i]
+#        hist(training[,i], main = paste0(i, ' ', name))
+#        hist(training_[,i])
+#}
+
+training <- training_
+rm('training_')
+```
+
+Lets' check Near Zero Variation covariates
+
+```{r}
+nzv <- nearZeroVar(training, saveMetrics = TRUE)
+sum(nzv$nzv)
+```
+
+As we can see, there is no near zero covariates
+
+Lets' find highly correlated pairs of variables. Correlation matrix
+
+```{r}
+# dev.off()
+ corMatr <- cor(x = training[,-dim(training)[2]])
+# lower triangle of сorrelation  matrix
+ corMatr_lower_tri <- corMatr * lower.tri(corMatr, diag = F)
+```
+
+Then exclude highly-correlated variables (with correlation \> 0.82 )
+
+```{r}
+ row_m <- integer(0) 
+ for (column_m in 1:(dim(corMatr_lower_tri)[2])){
+        if (length(which(abs(corMatr_lower_tri[,column_m]) > 0.82)) != 0){
+                row_m <- c(row_m, which(abs(corMatr_lower_tri[,column_m]) > 0.82))
+                row_m <- unique(row_m)
+        } 
+}
+names(row_m) <- NULL
+row_m
+# updating datasets
+training <- training[, names(training)[-row_m]]
+testing <- testing[, names(testing)[-row_m]]
+```
+
+Taking in account that we don't know target variable in so called
+testing data set, let's split training data set into two data sets: for
+training and for testing our models, then let's try to fit different
+models.
+
+```{r}
+inTrain <- createDataPartition(y = training$classe, 
+                               p = 0.75, 
+                               list = F)
+df_train <- training[inTrain,] # dim(df_train) # 14180    45
+df_test  <- training[-inTrain,] # dim(df_test) # 4725   45
+```
+
+### 3. Fitting different models
+
+-   Predicting with trees:
+
+```{r}
+t1 <- Sys.time()
+modFit2 <- train(classe ~., 
+                method = 'rpart', 
+                data = df_train) 
+pred2_1 <- predict(object = modFit2, df_train[,-dim(df_train)[2]])
+cm2_1 <- confusionMatrix(pred2_1, df_train[, dim(df_train)[2]])
+cm2_1$overall[1] #Accuracy (train) 0.4985896 
+pred2_2 <- predict(object = modFit2, df_test[,-dim(df_test)[2]])
+cm2_2 <- confusionMatrix(pred2_2, df_test[, dim(df_test)[2]])
+cm2_2$overall[1] #Accuracy  (test) 0.4986243 
+
+t2 <- Sys.time()
+```
+
+-   Random forest (could be considered as an extension of bagging for
+    classification trees):
+
+```{r}
+modFit3 <- train(classe ~ ., 
+                data = df_train, 
+                method = 'rf')
+pred3_1 <- predict(object = modFit3, df_train[,-dim(df_train)[2]])
+cm3_1 <- confusionMatrix(pred3_1, df_train[, dim(df_train)[2]])
+cm3_1$overall[1] # Accuracy (train) 1
+pred3_2 <- predict(object = modFit3, df_test[,-dim(df_test)[2]])
+cm3_2 <- confusionMatrix(pred3_2, df_test[, dim(df_test)[2]])
+cm3_2$overall[1] # Accuracy (test) 0.9934392 
+t3 <- Sys.time()
+t4 <- Sys.time()
+```
+
+-   Linear Discriminant Analysis (uses dimensionality reduction
+    techniques to the data at hand so that we can explore the data and
+    utilize it for modeling in an efficient manner):
+
+```{r}
+modFit5 <- train(classe ~ . , 
+                data = df_train, 
+                method = 'lda')
+pred5_1 <- predict(object = modFit5, df_train[,-dim(df_train)[2]])
+cm5_1 <- confusionMatrix(pred5_1, df_train[, dim(df_train)[2]])
+cm5_1$overall[1] # Accuracy (train) 0.6817348
+pred5_2 <- predict(object = modFit5, df_test[,-dim(df_test)[2]])
+cm5_2 <- confusionMatrix(pred5_2, df_test[, dim(df_test)[2]])
+cm5_2$overall[1] # Accuracy (test) 0.6797884 
+t5 <- Sys.time()
+```
+
+-   Generalized Boosted Model (GBM) (using a set of "weak" classifiers
+    for creation "strong" classifier):
+
+```{r}
+modFit6 <- train(classe ~ . , 
+                 data = df_train, 
+                 method = 'gbm',
+                 verbose = FALSE)
+pred6_1 <- predict(object = modFit6, df_train[,-dim(df_train)[2]])
+cm6_1 <- confusionMatrix(pred6_1, df_train[, dim(df_train)[2]])
+cm6_1$overall[1] # Accuracy (train) 0.9727786
+pred6_2 <- predict(object = modFit6, df_test[,-dim(df_test)[2]])
+cm6_2 <- confusionMatrix(pred6_2, df_test[, dim(df_test)[2]])
+cm6_2$overall[1] # Accuracy (test) 0.9608466
+t6 <- Sys.time()
+```
+
+Training time consumption summary:
+
+```{r}
+dif1 <- t2-t1
+print(paste0('PREDICTING WITH TREES: ', round(dif1, 2), ' ', attributes(dif1)$units))
+```
+
+```{r}
+dif2 <- t3-t2
+print(paste0('Random forest: ', round(dif2, 2), ' ', attributes(dif2)$units))
+```
+
+```{r}
+dif4 <- t5-t4
+print(paste0('Linear Discriminant Analysis: ', round(dif4, 2), ' ', attributes(dif4)$units))
+```
+
+```{r}
+dif5 <- t6-t5
+print(paste0('Generalized Boosted Model (GBM): ', round(dif5, 2), ' ', attributes(dif5)$units))
+
+```
+
+At this point we can choose the model for the further research basing on
+balance between computation demand and accuracy. In my opinion the best
+option is Generalized Boosted Model (GBM). It takes about an average
+time for training - 15 minutes and performs with high accuracy.
+
+Let's introduce cross validation to enhance training of the model. Since
+I had some strange results when I tried to apply caret::trainControl()
+function, I decided to cross-validate my model manually, based on k-fold
+concept
+
+```{r}
+k = 5
+n_row_df_train <- nrow(df_train)
+n_row_df_train_fold <- round(n_row_df_train / 5, 0)
+mixed_index <- sample(1:n_row_df_train, replace = F)
+df_train_kf <- df_train[mixed_index, ]
+model_list <- list()
+index1 <- list()
+index2 <- list()
+time_start <- list()
+time_finish <- list() 
+cv_list <- list() 
+pred_list <- list()
+conf_matr <- list()
+for (i in 1:k){
+        if (i==1){
+                index1[[i]] <- 1
+                index2[[i]] <- n_row_df_train_fold
+        } else if (i==k){
+                index1[[i]] <- 1 + (k-1) * n_row_df_train_fold
+                index2[[i]] <- n_row_df_train
+        } else {
+                index1[[i]] <- 1 + (i-1) * n_row_df_train_fold
+                index2[[i]] <- i * n_row_df_train_fold
+        }
+        time_start[[i]] <- Sys.time()
+        cv_list[[i]] <- train(classe ~ . , 
+                              data = df_train_kf[-((index1[[i]]):(index2[[i]])),], 
+                              method = 'gbm',
+                              verbose = FALSE)
+        pred_list[[i]] <- predict(cv_list[[i]] , newdata = df_train_kf[(index1[[i]]):(index2[[i]]), ])
+        conf_matr[[i]] <- confusionMatrix(pred_list[[i]], df_train_kf$classe[(index1[[i]]):(index2[[i]])])
+        time_finish[[i]] <- Sys.time()
+}
+timeDelta <- unlist(time_finish) - unlist(time_start)
+```
+
+i-fold training time consumption:
+
+```{r}
+timeDelta/60
+```
+
+Avg. accuracy:
+
+```{r}
+(conf_matr[[1]]$overall[1] + 
+conf_matr[[2]]$overall[1] + 
+conf_matr[[3]]$overall[1] + 
+conf_matr[[4]]$overall[1] + 
+conf_matr[[5]]$overall[1] ) / 5
+
+```
+
+The Accuracy metric remains approximately the same when we train our
+model applying cross validation algorithm
+
+Let's predict 20 different test cases using chosen prediction model
+(GBM).
+
+```{r}
+final_prediction <- predict(modFit6 , newdata = testing)
+final_prediction
+```
